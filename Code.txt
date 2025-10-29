@@ -1,0 +1,135 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
+import os
+# Paths configuration
+DATA_PATH = "data/creditcard.csv"
+MODEL_PATH = "models/fraud_model.pkl"
+SCALER_PATH = "models/scaler.pkl"
+# Create models folder if it doesn't exist
+os.makedirs("models", exist_ok=True)
+# Load dataset
+data = pd.read_csv(DATA_PATH)
+# Features and target
+X = data.drop(columns=["Class"])
+y = data["Class"]
+# Scale 'Amount' column
+scaler = StandardScaler()
+X["Amount"] = scaler.fit_transform(X["Amount"].values.reshape(-1, 1))
+# Train/test split
+X_train, X_test, y_train, y_test = train_test_split(
+ X, y, test_size=0.2, random_state=42, stratify=y
+)
+# Train RandomForestClassifier
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+# Save the trained model and scaler
+joblib.dump(model, MODEL_PATH)
+joblib.dump(scaler, SCALER_PATH)
+# Evaluate model performance
+accuracy = model.score(X_test, y_test)
+print(f"Model trained successfully!")
+print(f"Test Accuracy: {accuracy:.4f}")
+print(f"Fraud cases in dataset: {y.sum()}")
+print(f"Total transactions: {len(data)}")
+
+
+
+#app.py
+from flask import Flask, render_template, request, jsonify
+import pandas as pd
+import numpy as np
+import joblib
+import os
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = "uploads"
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+MODEL_PATH = "models/fraud_model.pkl"
+SCALER_PATH = "models/scaler.pkl"
+DATA_PATH = "data/creditcard.csv"
+# Load model and scaler
+model = joblib.load(MODEL_PATH)
+scaler = joblib.load(SCALER_PATH)
+# Global variable to store current dataset
+current_data = pd.read_csv(DATA_PATH)
+def get_current_data():
+ """Return the currently active dataset"""
+ return current_data
+def update_current_data(new_data):
+ """Update the current dataset with new data"""
+ global current_data
+ current_data = new_data
+def validate_and_standardize_data(df):
+ """
+ Validate and standardize the uploaded dataset to match expected format
+ """
+ # Create a copy of the dataframe
+ df_standardized = df.copy()
+
+ # Check if 'Time' column exists, if not create a dummy one
+ if 'Time' not in df.columns:
+ print("Warning: 'Time' column not found. Creating sequential time values.")
+ df_standardized['Time'] = range(len(df))
+
+ # Check if 'Class' column exists (this is required)
+ if 'Class' not in df.columns:
+ raise ValueError("Required column 'Class' not found in dataset")
+
+ # Check if 'Amount' column exists
+ if 'Amount' not in df.columns:
+ # Try to find alternative amount columns
+ amount_aliases = ['amount', 'AMOUNT', 'transaction_amount', 'TransactionAmount']
+ for alias in amount_aliases:
+ if alias in df.columns:
+ df_standardized['Amount'] = df[alias]
+break
+ else:
+ raise ValueError("No amount column found. Please include 'Amount' column")
+
+ # Check for V1-V28 columns
+ v_columns_missing = []
+ for i in range(1, 29):
+ v_col = f'V{i}'
+ if v_col not in df.columns:
+ v_columns_missing.append(v_col)
+
+ # If V columns are missing, check if we have enough features
+ if v_columns_missing:
+ print(f"Warning: Missing V columns: {v_columns_missing}")
+ # Count available feature columns (excluding known columns)
+ known_columns = ['Time', 'Amount', 'Class']
+ feature_columns = [col for col in df.columns if col not in known_columns and not col.startswith('V')]
+
+ if len(feature_columns) >= 28:
+ # Rename first 28 feature columns to V1-V28
+ for i, col in enumerate(feature_columns[:28], 1):
+ df_standardized[f'V{i}'] = df[col]
+ else:
+ print(f"Warning: Only {len(feature_columns)} feature columns available. Some V columns will be
+filled with zeros.")
+ # Fill missing V columns with zeros
+ for v_col in v_columns_missing:
+ df_standardized[v_col] = 0
+
+ # Ensure we have all required columns in the correct order
+ required_columns = ['Time'] + [f'V{i}' for i in range(1, 29)] + ['Amount', 'Class']
+
+ # Add any missing required columns with default values
+ for col in required_columns:
+ if col not in df_standardized.columns:
+ if col == 'Time':
+ df_standardized[col] = range(len(df))
+ elif col.startswith('V'):
+ df_standardized[col] = 0
+ elif col == 'Amount':
+ df_standardized[col] = 0.0
+elif col == 'Class':
+ df_standardized[col] = 0
+
+ # Reorder columns to match expected format
+ final_columns = [col for col in required_columns if col in df_standardized.columns]
+ df_standardized = df_standardized[final]
